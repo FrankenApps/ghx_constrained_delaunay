@@ -31,6 +31,17 @@ pub const DEFAULT_ILTER_PARALLEL_TRI_COUNT_THRESHOLD: usize = 100_000;
 /// Good default value for `filter_parallel_min_batch_len` in [`TriangulationConfiguration`]
 pub const DEFAULT_FILTER_PARALLEL_MIN_BATCH_LEN: usize = 1000;
 
+/// Defines the order of vertices that form a triangle.
+#[derive(Clone, Debug, Default)]
+pub enum TriangleOrientation {
+    /// The vertices of each triangle are in clockwise order.
+    #[default]
+    Cw,
+
+    /// The vertices of each triangle are in counter-clockwise order.
+    Ccw,
+}
+
 #[derive(Clone, Debug)]
 pub struct TriangulationConfiguration {
     /// Binsort will cover the region to be triangulated by a rectangular grid so that each bin contains roughly N^(density_power) points.
@@ -45,6 +56,9 @@ pub struct TriangulationConfiguration {
 
     #[cfg(feature = "debug_context")]
     pub debug_config: DebugConfiguration,
+
+    /// Defines the order of vertices that form each triangle in the triangulation result.
+    pub triangle_orientation: TriangleOrientation
 }
 impl Default for TriangulationConfiguration {
     fn default() -> Self {
@@ -58,6 +72,7 @@ impl Default for TriangulationConfiguration {
 
             #[cfg(feature = "debug_context")]
             debug_config: DebugConfiguration::default(),
+            triangle_orientation: TriangleOrientation::default(),
         }
     }
 }
@@ -138,6 +153,7 @@ pub fn triangulation_from_2d_vertices<T: Vertex2d>(
         &normalized_vertices,
         config.bin_vertex_density_power,
         &mut None,
+        &config.triangle_orientation,
         #[cfg(feature = "debug_context")]
         &mut debug_context,
     )?;
@@ -382,11 +398,12 @@ fn verts_count_to_restoration_stack_initial_capacity(verts_count: usize) -> usiz
     }
 }
 
-/// - `vertices` should be normalized with their cooridnates in [0,1]
+/// - `vertices` should be normalized with their coordinates in [0,1]
 pub(crate) fn wrap_and_triangulate_2d_normalized_vertices(
     vertices: &[Vertex],
     bin_vertex_density_power: f64,
     vertex_merge_mapping: &mut Option<Vec<VertexId>>,
+    triangle_orientation: &TriangleOrientation,
     #[cfg(feature = "debug_context")] debug_context: &mut DebugContext,
 ) -> Result<Triangles, TriangulationError> {
     #[cfg(feature = "profile_traces")]
@@ -470,6 +487,7 @@ pub(crate) fn wrap_and_triangulate_2d_normalized_vertices(
                     edge_index,
                     edge,
                     vertex_id,
+                    triangle_orientation,
                     &mut quads_to_check,
                     #[cfg(feature = "debug_context")]
                     debug_context,
@@ -707,6 +725,7 @@ pub(crate) fn split_quad_into_four_triangles(
     edge_index: TriangleEdgeIndex,
     edge: Edge,
     vertex_id: VertexId,
+    triangle_orientation: &TriangleOrientation,
     quads_to_check: &mut Vec<(TriangleId, TriangleId)>,
     #[cfg(feature = "debug_context")] debug_context: &mut DebugContext,
 ) {
@@ -731,7 +750,14 @@ pub(crate) fn split_quad_into_four_triangles(
 
     // t3
     let t3_v3 = t1_before.v(opposite_vertex_index(edge_index));
-    triangles.create([vertex_id, edge.to, t3_v3], [t4.into(), n1, t1.into()]);
+    match triangle_orientation {
+        TriangleOrientation::Cw => {
+            triangles.create([vertex_id, edge.to, t3_v3], [t4.into(), n1, t1.into()]);
+        }
+        TriangleOrientation::Ccw => {
+            triangles.create([vertex_id, t3_v3, edge.to], [t1.into(), n1, t4.into()]);
+        }
+    }
 
     // TODO Optim: Can do a tiny bit better
     let t2_opposite_v_id = t2_before.get_opposite_vertex_id(&edge);
@@ -741,24 +767,53 @@ pub(crate) fn split_quad_into_four_triangles(
     let n4 = t2_before.neighbor(vertex_next_cw_edge_index(t2_opposite_v_index));
 
     // t4
-    triangles.create(
-        [vertex_id, t2_opposite_v_id, edge.to],
-        [t2.into(), n4, t3.into()],
-    );
+    match triangle_orientation {
+        TriangleOrientation::Cw => {
+            triangles.create(
+                [vertex_id, t2_opposite_v_id, edge.to],
+                [t2.into(), n4, t3.into()],
+            );
+        }
+        TriangleOrientation::Ccw => {
+            triangles.create(
+                [vertex_id, edge.to, t2_opposite_v_id],
+                [t3.into(), n4, t2.into()],
+            );
+        }
+    };
 
-    // Update t1 verts
-    let verts = [vertex_id, t3_v3, edge.from];
-    triangles.get_mut(t1).verts = verts;
-    // Update t1 neighbors
-    let neighbors = [t3.into(), n2, t2.into()];
-    triangles.get_mut(t1).neighbors = neighbors;
+    match triangle_orientation {
+        TriangleOrientation::Cw => {
+            // Update t1 verts clockwise
+            let verts = [vertex_id, t3_v3, edge.from];
+            triangles.get_mut(t1).verts = verts;
+            // Update t1 neighbors
+            let neighbors = [t3.into(), n2, t2.into()];
+            triangles.get_mut(t1).neighbors = neighbors;
 
-    // Update t2 verts
-    let verts = [vertex_id, edge.from, t2_opposite_v_id];
-    triangles.get_mut(t2).verts = verts;
-    // Update t2 neighbors
-    let neighbors = [t1.into(), n3, t4.into()];
-    triangles.get_mut(t2).neighbors = neighbors;
+            // Update t2 verts clockwise
+            let verts = [vertex_id, edge.from, t2_opposite_v_id];
+            triangles.get_mut(t2).verts = verts;
+            // Update t2 neighbors
+            let neighbors = [t1.into(), n3, t4.into()];
+            triangles.get_mut(t2).neighbors = neighbors;
+        }
+        TriangleOrientation::Ccw => {
+            // Update t1 verts counter-clockwise
+            let verts = [vertex_id, edge.from, t3_v3];
+            triangles.get_mut(t1).verts = verts;
+            // Update t1 neighbors
+            let neighbors = [t2.into(), n2, t3.into()];
+            triangles.get_mut(t1).neighbors = neighbors;
+
+            // Update t2 verts counter-clockwise
+            let verts = [vertex_id, t2_opposite_v_id, edge.from];
+            triangles.get_mut(t2).verts = verts;
+            // Update t2 neighbors
+            let neighbors = [t4.into(), n3, t1.into()];
+            triangles.get_mut(t2).neighbors = neighbors;
+        }
+    }
 
     // Update neighbors and fill in quads_to_check directly for later. Way better for performances.
     if n1.exists() {

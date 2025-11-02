@@ -8,8 +8,7 @@ use crate::infinite::{
     quad_diagonals_intersection_2_infinite,
 };
 use crate::triangulation::{
-    normalize_vertices_coordinates, update_neighbor_neighbor, Triangulation, TriangulationError,
-    DEFAULT_BIN_VERTEX_DENSITY_POWER,
+    DEFAULT_BIN_VERTEX_DENSITY_POWER, TriangleOrientation, Triangulation, TriangulationError, normalize_vertices_coordinates, update_neighbor_neighbor
 };
 use crate::types::{
     next_counter_clockwise_edge_index, TriangleEdgeIndex, Triangles, Vertex, Vertex2d, Vertex3d,
@@ -42,6 +41,9 @@ pub struct ConstrainedTriangulationConfiguration {
 
     #[cfg(feature = "debug_context")]
     pub debug_config: DebugConfiguration,
+
+    /// Defines the order of vertices that form each triangle in the triangulation result.
+    pub triangle_orientation: TriangleOrientation,
 }
 
 impl Default for ConstrainedTriangulationConfiguration {
@@ -50,6 +52,7 @@ impl Default for ConstrainedTriangulationConfiguration {
             bin_vertex_density_power: DEFAULT_BIN_VERTEX_DENSITY_POWER,
             #[cfg(feature = "debug_context")]
             debug_config: DebugConfiguration::default(),
+            triangle_orientation: TriangleOrientation::default(),
         }
     }
 }
@@ -129,6 +132,7 @@ pub fn constrained_triangulation_from_2d_vertices<T: Vertex2d>(
         &normalized_vertices,
         config.bin_vertex_density_power,
         &mut vertex_merge_mapping,
+        &config.triangle_orientation,
         #[cfg(feature = "debug_context")]
         &mut debug_context,
     )?;
